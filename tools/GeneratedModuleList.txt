@@ -11,6 +11,7 @@ Az.CustomProviders
 Az.Databricks
 Az.DedicatedHsm
 Az.DesktopVirtualization
+Az.DnsResolver
 Az.Functions
 Az.HanaOnAzure
 Az.HealthBot
