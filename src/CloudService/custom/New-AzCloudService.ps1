@@ -57,13 +57,13 @@ function New-AzCloudService {
         [Microsoft.Azure.PowerShell.Cmdlets.CloudService.Category('Body')]
         [System.String]
         # Specifies the XML service configuration (.cscfg) for the cloud service.
-        ${Configuration},
+        ${ConfigurationFile},
         
         [Parameter(ParameterSetName='quickCreateParameterSetWithoutStorage', Mandatory)]
         [Microsoft.Azure.PowerShell.Cmdlets.CloudService.Category('Body')]  #TODO what should this line be? not in body or path
         [System.String]
         # Specifies the XML service definitions (.csdef) for the cloud service. 
-        ${ServiceDefinitionFile},
+        ${DefinitionFile},
 
         [Parameter(ParameterSetName='quickCreateParameterSetWithoutStorage', Mandatory)]
         [Microsoft.Azure.PowerShell.Cmdlets.CloudService.Category('Body')]
@@ -110,16 +110,86 @@ function New-AzCloudService {
         [Microsoft.Azure.PowerShell.Cmdlets.CloudService.Category('Body')] #TODO
         [System.String]
         # Name of the KeyVault to be used for the CloudService resource
-        ${Configuration},
+        ${DnsName},
 
         [Parameter(ParameterSetName='quickCreateParameterSetWithoutStorage')]
         [Microsoft.Azure.PowerShell.Cmdlets.CloudService.Category('Body')]  #TODO 
         [System.String]
         # Name of Dns to be used for the CloudService resource
-        ${Configuration}
+        ${KeyVaultName}
     )
 
     process {
+
+        # extract csdef/cscfg 
+
+        if (-not (Test-Path $ConfigurationFile))  # TODO
+        {
+            Write-Error "Cannot find file $JsonTemplatePath. Please make sure it exists!"
+            exit 1
+        }
+        [xml]$csdef = Get-Content -Path $DefinitionFile
+        [xml]$cscfg = Get-Content -Path $ConfigurationFile
+
+        # do validation 
+        validation $cscfg $csdef
+
+        # if storage is not given, create it 
+
+        
+        # network profile
+        if ( $null -eq $cscfg.ServiceConfiguration.NetworkConfiguration.AddressAssignments.ReservedIPs.ReservedIPs ){
+            $publicIpName = $name + "Ip"
+            if ($PSBoundParameters.ContainsKey("ParameterA"))
+            {
+
+            }
+            # Create a public IP address and (optionally) set the DNS label property of the public IP address. If you are using a static IP, it needs to referenced as a Reserved IP in Service Configuration file.
+            $publicIp = New-AzPublicIpAddress -Name “ContosIp” -ResourceGroupName $ResourceGroupName -Location $Location -AllocationMethod Dynamic -IpAddressVersion IPv4 -DomainNameLabel “contosoappdns” -Sku Basic
+        }
+        else {
+            $publicIpName = $cscfg.ServiceConfiguration.NetworkConfiguration.AddressAssignments.ReservedIPs.ReservedIP.Name
+        }
+        
+            # Create Network Profile Object and associate public IP address to the frontend of the platform created load balancer.
+        $publicIP = Get-AzPublicIpAddress -ResourceGroupName ContosOrg -Name $publicIpName  
+        $feIpConfig = New-AzCloudServiceLoadBalancerFrontendIPConfigurationObject -Name 'ContosoFe' -PublicIPAddressId $publicIP.Id 
+        $loadBalancerConfig = New-AzCloudServiceLoadBalancerConfigurationObject -Name 'ContosoLB' -FrontendIPConfiguration $feIpConfig 
+        $networkProfile = @{loadBalancerConfiguration = $loadBalancerConfig}
+
+        # Create network profile object
+        $publicIp = Get-AzPublicIpAddress -ResourceGroupName $ResourceGroupName -Name ContosIp
+        $feIpConfig = New-AzCloudServiceLoadBalancerFrontendIPConfigurationObject -Name 'ContosoFe' -PublicIPAddressId $publicIp.Id
+        $loadBalancerConfig = New-AzCloudServiceLoadBalancerConfigurationObject -Name 'ContosoLB' -FrontendIPConfiguration $feIpConfig
+        $networkProfile = @{loadBalancerConfiguration = $loadBalancerConfig}
+
+        # OS Profile
+
+        # Role Profile 
+
+        $cfg_role1 = $cscfg.ServiceConfiguration.Role[0]
+        $def_role1 = $csdef.ServiceDefinition.($cfg_role1.name)
+        $role1 = New-AzCloudServiceRoleProfilePropertiesObject -Name $def_role1.Name -SkuName $def_role1.vmsize -SkuTier 'Standard' -SkuCapacity $cfg_role1.Instances.count 
+        
+        if ( $cscfg.ServiceConfiguration.Role.count -eq 2 )   
+        {
+            $cfg_role2 = $cscfg.ServiceConfiguration.Role[1]
+            $def_role2 = $csdef.ServiceDefinition.($cfg_role2.name)
+            $role2 = New-AzCloudServiceRoleProfilePropertiesObject -Name $def_role2.Name -SkuName $def_role2.vmsize -SkuTier 'Standard' -SkuCapacity $cfg_role2.Instances.count 
+
+            $roleProfile = @{role = @($role1, $role2)} 
+        }
+        else
+        {
+            $roleProfile = @{role = @($role1)} 
+        }
+        
+
+        
+
+        # pass it along 
+
+
         if ($PSBoundParameters.ContainsKey("ParameterA"))
         {
             # Do something with the -ParameterA parameter
@@ -141,4 +211,30 @@ function New-AzCloudService {
         # If these variants should call back to the original cmdlet, use splatting to pass the existing set of parameters
         MyModule\Get-Foo @PSBoundParameters
     }
+
+}
+
+function validation
+{
+    param(
+        [Parameter()]
+        [object]
+        ${cscfg},
+        [Parameter()]
+        [object]
+        ${csdef}
+    )
+
+    # Network configuration missing in configuration
+    If ( $null -eq $cscfg.ServiceConfiguration.NetworkConfiguration -or $cscfg.ServiceConfiguration.NetworkConfiguration.VirtualNetworkSite.count -eq 0 -or $cscfg.ServiceConfiguration.NetworkConfiguration.AddressAssignments.InstanceAddress.Subnets.count -eq 0)
+    {
+        Write-Error("The network configuration is missing from the configuration file. Please add the network configuration to the configuration file and re-upload.")
+        exit 1
+    }
+
+
+
+
+
+
 }
